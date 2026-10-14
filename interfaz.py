@@ -253,6 +253,10 @@ class PianoUI:
         self._last = time.monotonic()
         self.reset_song()
 
+    def set_keys(self, notes):
+        """Cambia el teclado (10 teclas (nombre, midi)): cada cancion usa el suyo."""
+        self.notes = notes
+
     def reset_song(self):
         self.ok = self.fail = self.streak = self.best = 0
         self.t_start = self.t_end = None
@@ -830,6 +834,7 @@ class PianoUI:
             lit = p > 0.5
             dy = int(round(p * (sh - 1)))
 
+            # todas las teclas se ven igual (tambien los sostenidos: el nombre ya lo indica)
             white, wgt, inv = self._key_sprite(key_w, key_h - sh, r, None)
             if p > 0.04:
                 colored = self._key_sprite(key_w, key_h - sh, r, i)[0]
@@ -850,7 +855,8 @@ class PianoUI:
             self.fonts.draw(img, name, cx, ky + dy + int(key_h * 0.47), int(22 * s) + 2,
                             (255, 255, 255) if lit else DARK_TEXT, "bold", "cm", shadow=lit)
             self.fonts.draw(img, self.finger_names[i], cx, ky + dy + key_h - sh - int(15 * s), int(12 * s) + 2,
-                            (255, 255, 255) if lit else (120, 110, 104), "regular", "cm", shadow=False)
+                            (255, 255, 255) if lit else (120, 110, 104),
+                            "regular", "cm", shadow=False)
 
     # --- cuenta atras y anillo del puno ------------------------------------------
     def _draw_countdown(self, img, s, remaining, has_hands):
@@ -1022,7 +1028,9 @@ class PianoUI:
         y += sh + int(22 * k)
 
         nw = T(str(len(notes)), x0 + pad, y, 34, TEXT, "bold")
-        T("notas", x0 + pad + nw + int(8 * k), y + int(14 * k), 16, MUTED, shadow=False)
+        keys = song.get("keys")
+        span = f"  ·  {keys[0][0]}–{keys[-1][0]}" if keys else ""
+        T("notas" + span, x0 + pad + nw + int(8 * k), y + int(14 * k), 16, MUTED, shadow=False)
         T(f"Récord  {record} %" if record is not None else "Sin récord", x1 - pad, y + int(14 * k), 15,
           GOLD if record is not None else MUTED, "semibold" if record is not None else "regular", "rt",
           shadow=False)

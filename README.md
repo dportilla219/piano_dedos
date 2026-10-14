@@ -1,7 +1,8 @@
 # Piano de dedos
 
 Piano de 10 notas que se toca con los dedos frente a la cámara web. Cada dedo es una nota
-(Sol3 – Si4). Incluye 6 canciones guía que se eligen con gestos de la mano.
+(cada canción elige sus 10 teclas). Incluye 6 canciones guía (villancicos y clásicos) que se eligen
+con gestos de la mano.
 
 Detecta las manos con el modelo preentrenado **Hand Landmarker de MediaPipe** y sintetiza el
 sonido de piano con numpy + pygame.
@@ -37,9 +38,21 @@ Al iniciar aparece un carrusel con las canciones (nombre, número de notas, difi
 - Con el teclado: flechas ← → (o A / D) y Enter.
 - **Pulgar abajo** mantenido 1,5 s (en el carrusel o al terminar una canción) cierra la aplicación.
 
-Canciones: Jingle Bells, Himno de la alegría, Estrellita ¿dónde estás?, Cumpleaños feliz,
-Martinillo y María tenía un corderito. Para añadir más, edita `canciones.py`
-(todas deben caber en Sol3 – Si4, solo teclas blancas).
+Canciones (villancicos de una Navidad tradicional colombiana y clásicos):
+
+| Canción | Notas | Teclas |
+|---|---|---|
+| Jingle Bells | 92 | Sol3–Si4 |
+| Himno de la alegría | 62 | Sol3–Si4 |
+| Cumpleaños feliz | 25 | Sol3–Si4 |
+| Noche de paz | 46 | Do4–Mi5 |
+| Los peces en el río | 76 | Mi4–Fa5 (con Sol#) |
+| El tamborilero | 65 | Sol3–Si4 |
+
+Cada canción trae su propio teclado de 10 teclas (una por dedo), generado a partir de las notas
+que usa; admite teclas negras, pero no más de 10 notas distintas. Para añadir más, edita
+`canciones.py`. Las transcripciones de los villancicos vienen de flauta-dulce.com (transpuestas
+a Do mayor cuando era posible).
 
 El récord de precisión de cada canción se guarda en `records.json`.
 

@@ -42,14 +42,10 @@ MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hand_land
 RECORDS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "records.json")
 
 # ---------------------------------------------------------------------------
-# Escala de 10 notas (Sol3 .. Si4): todas las canciones de canciones.py caben en ella.
-# Mano izquierda (en pantalla): menique -> pulgar = notas 0..4
-# Mano derecha  (en pantalla): pulgar  -> menique = notas 5..9   (como un piano)
+# 10 teclas, una por dedo. Cada cancion trae las suyas (canciones.py: 10 teclas blancas seguidas).
+# Mano izquierda (en pantalla): menique -> pulgar = teclas 0..4
+# Mano derecha  (en pantalla): pulgar  -> menique = teclas 5..9   (como un piano)
 # ---------------------------------------------------------------------------
-NOTES = [  # (nombre, midi)
-    ("Sol3", 55), ("La3", 57), ("Si3", 59), ("Do4", 60), ("Re4", 62),
-    ("Mi4", 64), ("Fa4", 65), ("Sol4", 67), ("La4", 69), ("Si4", 71),
-]
 FINGER_NAMES = ["Meñique I", "Anular I", "Medio I", "Índice I", "Pulgar I",
                 "Pulgar D", "Índice D", "Medio D", "Anular D", "Meñique D"]
 TIPS = [4, 8, 12, 16, 20]  # indices MediaPipe: pulgar, indice, medio, anular, menique
@@ -84,10 +80,12 @@ def make_piano_sound(midi, seconds=1.6):
 
 
 def init_audio():
+    """Un sonido por cada tecla que usa alguna cancion (y los acordes del menu): {midi: Sound}."""
     pygame.mixer.pre_init(SAMPLE_RATE, -16, 2, 256)
     pygame.mixer.init()
     pygame.mixer.set_num_channels(16)
-    return [make_piano_sound(midi) for _, midi in NOTES]
+    midis = {m for song in SONGS for _, m in song["keys"]} | {55, 59, 60, 62, 64, 67}
+    return {m: make_piano_sound(m) for m in sorted(midis)}
 
 
 # ---------------------------------------------------------------------------
@@ -279,7 +277,7 @@ def main():
     win = "Piano de dedos"
     cv2.namedWindow(win, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(win, 1280, 720)
-    ui = PianoUI(NOTES, FINGER_NAMES, COLORS, {"L": LEFT_HAND_IDS, "R": RIGHT_HAND_IDS})
+    ui = PianoUI(SONGS[0]["keys"], FINGER_NAMES, COLORS, {"L": LEFT_HAND_IDS, "R": RIGHT_HAND_IDS})
     gestures = HandGestures()
     records = load_records()
 
@@ -303,6 +301,14 @@ def main():
     saved = False
     quit_t = None          # instante en que se pidio cerrar (se muestra una despedida y se sale)
 
+    def play_key(fid, info=None):
+        """Toca la tecla fid (0..9) del teclado de la cancion indicada (por defecto la actual)."""
+        sounds[(info or song_info)["keys"][fid][1]].play()
+
+    def chord(*midis):
+        for m in midis:
+            sounds[m].play()
+
     def handle(event):
         """Aplica un evento: "next" / "prev" / "select" (carrusel), "menu" (volver al carrusel)
         o "repeat" (repetir la cancion actual con su cuenta atras) o "quit" (cerrar)."""
@@ -311,21 +317,21 @@ def main():
         if event == "quit":
             if quit_t is None:
                 quit_t = time.monotonic()
-                for n in (0, 2, 4):    # acorde de Sol mayor, mas grave: despedida
-                    sounds[n].play()
+                chord(55, 59, 62)      # acorde de Sol mayor, grave: despedida
         elif event in ("next", "prev") and state == "menu":
             menu_pos += 1 if event == "next" else -1
-            sounds[SONGS[menu_pos % len(SONGS)]["notes"][0]].play()   # anticipo: su primera nota
+            nxt = SONGS[menu_pos % len(SONGS)]
+            play_key(nxt["notes"][0], nxt)                            # anticipo: su primera nota
         elif event == "select" and state == "menu":
             song_info = SONGS[menu_pos % len(SONGS)]
             song, song_pos, saved = song_info["notes"], 0, False
             ui.song_picked()
             ui.reset_song()
             ui.song_title = song_info["title"]
+            ui.set_keys(song_info["keys"])
             detector.reset()
             active, candidate, cand_count = None, None, 0
-            for n in (3, 5, 7):    # acorde de Do mayor: cancion elegida
-                sounds[n].play()
+            chord(60, 64, 67)      # acorde de Do mayor: cancion elegida
             state, count_t0 = "cuenta", time.monotonic()
         elif event == "menu" and state != "menu":
             gestures.reset()
@@ -335,8 +341,7 @@ def main():
             ui.reset_song()
             detector.reset()
             active, candidate, cand_count = None, None, 0
-            for n in (3, 5, 7):
-                sounds[n].play()
+            chord(60, 64, 67)
             state, count_t0 = "cuenta", time.monotonic()
 
     while True:
@@ -411,7 +416,7 @@ def main():
                     state, countdown = "tocar", None
 
             for fid in hits:
-                sounds[fid].play()
+                play_key(fid)
                 guided = show_guide and song_pos < len(song)   # cuenta para racha / precision
                 correct = song_pos < len(song) and song[song_pos] == fid
                 if correct:
