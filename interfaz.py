@@ -28,6 +28,7 @@ TEXT = (246, 242, 238)
 MUTED = (175, 165, 158)
 ACCENT = (130, 225, 140)    # verde: siguiente nota de la guia
 GOLD = (70, 195, 255)
+RED = (90, 90, 240)         # cerrar la aplicacion
 DARK_TEXT = (48, 40, 36)
 
 TIP_IDS = {4, 8, 12, 16, 20}
@@ -244,6 +245,10 @@ class PianoUI:
         self._key_centers = {}
         self._last_pos = None
         self._s = 1.0
+        self._car = None             # posicion animada del carrusel
+        self._car_goal = None
+        self._arrow = (-10.0, 0)     # (instante, direccion) del ultimo cambio de cancion
+        self._picked_t = -10.0       # instante en que se eligio una cancion (pulso de la tarjeta)
         self._fps = 0.0
         self._last = time.monotonic()
         self.reset_song()
@@ -253,7 +258,14 @@ class PianoUI:
         self.t_start = self.t_end = None
         self._streak_t = -10.0
         self._lane_off = 0.0
+        self._last_pos = None
         self.confetti = []
+        self.new_record = False
+
+    def precision(self):
+        """Porcentaje de aciertos con la guia activa (None si aun no se ha tocado nada)."""
+        total = self.ok + self.fail
+        return round(100 * self.ok / total) if total else None
 
     # --- eventos -----------------------------------------------------------
     def note_hit(self, fid, pos, correct, guided=True):
@@ -293,13 +305,18 @@ class PianoUI:
         del self.particles[:-400]
 
     # --- dibujo principal ----------------------------------------------------
-    def render(self, img, *, hands, tips, active, target, mode, thr, deltas, lowest,
-               line_y, song, song_pos, show_guide, connections):
+    def _tick(self):
         now = time.monotonic()
         dt = min(max(now - self._last, 1e-3), 0.1)
         self._last = now
         self._fps = 0.9 * self._fps + 0.1 / dt if self._fps else 1.0 / dt
+        return now, dt
 
+    def render(self, img, *, hands, tips, active, target, mode, thr, deltas, lowest,
+               line_y, song, song_pos, show_guide, connections, countdown=None, fist=None):
+        """countdown = segundos que faltan para empezar (o None).
+        fist = (progreso 0..1, punto en pantalla) para el anillo del puno al terminar (o None)."""
+        now, dt = self._tick()
         h, w = img.shape[:2]
         s = self._s = min(w / 1280, h / 720)
         kb = self._kb_layout(w, h, s)
@@ -323,9 +340,14 @@ class PianoUI:
             self._draw_guide(img, s, song, song_pos, now)
         self._draw_keyboard(img, s, kb, active, target, now, dt)
         celebrating = self.t_end is not None and now - self.t_end < 6.5
-        if not hands and not celebrating:
+        if not hands and not celebrating and countdown is None:
             self._draw_no_hands(img, s)
         self._draw_celebration(img, s, now, dt)
+        if countdown is not None:
+            self._draw_countdown(img, s, countdown, bool(hands))
+        if fist is not None and fist[1] is not None:
+            self._draw_fist_ring(img, s, fist[1], fist[0],
+                                 "Pulgar ↑ repetir  ·  Puño: otra canción  ·  Pulgar ↓ salir", fist[2])
 
     def _update_song(self, song, pos, now, dt, w, h, s):
         if self._last_pos is not None:
@@ -557,11 +579,12 @@ class PianoUI:
         total = self.ok + self.fail
         prec = f"{round(100 * self.ok / total)} %" if total else "—"
         secs = int(self.t_end - self.t_start) if self.t_start else 0
-        t1 = "¡Canción completa!"
+        t1 = "¡Nuevo récord!" if self.new_record else "¡Canción completa!"
         t2 = f"Precisión {prec}   ·   Mejor racha {self.best}   ·   Tiempo {secs // 60}:{secs % 60:02d}"
-        t3 = "Pulsa R para tocarla otra vez"
+        t3 = "Pulgar ↑ repetir  ·  Puño: otra canción  ·  Pulgar ↓ salir"
         s1, s2, s3 = int(44 * s) + 2, int(18 * s) + 2, int(15 * s) + 2
-        pw = max(self.fonts.width(t1, s1, "bold"), self.fonts.width(t2, s2)) + int(80 * s)
+        pw = max(self.fonts.width(t1, s1, "bold"), self.fonts.width(t2, s2),
+                 self.fonts.width(t3, s3)) + int(80 * s)
         ph = int(170 * s)
         x0 = (w - pw) // 2
         y0 = int(h * 0.40) - ph // 2 - int((1 - _ease_out(min(age / 0.35, 1.0))) * 30 * s)
@@ -636,7 +659,7 @@ class PianoUI:
         widths = [self._chip(img, s, 0, 0, draw=False, **c) for c in chips]
         chips_w = sum(widths) + gap * (len(chips) - 1)
         ws = "sensibilidad" if mode == "dedos" else "mover línea"
-        hint = f"M modo  ·  W/S {ws}  ·  G guía  ·  N nieve  ·  R reiniciar  ·  Q salir"
+        hint = f"M modo  ·  W/S {ws}  ·  G guía  ·  N nieve  ·  R reiniciar  ·  C canciones  ·  Q salir"
         title = "Piano de dedos"
         inner_w = max(self.fonts.width(title, title_size, "bold"), chips_w,
                       self.fonts.width(hint, hint_size))
@@ -706,8 +729,8 @@ class PianoUI:
             sx += self.fonts.draw(img, text, sx, sy, stat_size, color, weight, "lt", shadow=False)
 
         if pos >= len(song):
-            self.fonts.draw(img, "¡Canción completa!", bx0, cy, int(20 * s) + 2, ACCENT, "bold", "lm")
-            self.fonts.draw(img, "R para repetir", bx1, cy, int(15 * s) + 2, MUTED, "regular", "rm",
+            self.fonts.draw(img, "¡Canción completa!", bx0, cy, int(17 * s) + 2, ACCENT, "bold", "lm")
+            self.fonts.draw(img, "Pulgar: repetir  ·  Puño: menú", bx1, cy, int(12 * s) + 2, MUTED, "regular", "rm",
                             shadow=False)
             return
 
@@ -828,3 +851,198 @@ class PianoUI:
                             (255, 255, 255) if lit else DARK_TEXT, "bold", "cm", shadow=lit)
             self.fonts.draw(img, self.finger_names[i], cx, ky + dy + key_h - sh - int(15 * s), int(12 * s) + 2,
                             (255, 255, 255) if lit else (120, 110, 104), "regular", "cm", shadow=False)
+
+    # --- cuenta atras y anillo del puno ------------------------------------------
+    def _draw_countdown(self, img, s, remaining, has_hands):
+        h, w = img.shape[:2]
+        cx, cy = w // 2, int(h * 0.44)
+        num = max(1, math.ceil(remaining))
+        frac = remaining - math.floor(remaining) if remaining % 1 else 1.0   # 1 -> 0 en cada segundo
+        pop = _ease_out(min((1.0 - frac) / 0.25, 1.0))                        # aparece con un "pop"
+        R = int(92 * s)
+        panel(img, cx - R, cy - R, cx + R, cy + R, R, PANEL, 0.72, border=None)
+        circle_alpha(img, (cx, cy), R - int(10 * s), TRACK, max(3, int(6 * s)), 0.8)
+        cv2.ellipse(img, (cx, cy), (R - int(10 * s), R - int(10 * s)), -90, 0, int(360 * frac), ACCENT,
+                    max(3, int(6 * s)), cv2.LINE_AA)
+        size = int((70 + 26 * (1 - pop)) * s / 4) * 4 + 4    # tamano en pasos de 4 px (menos sprites)
+        self.fonts.draw(img, str(num), cx, cy, size, TEXT, "bold", "cm", alpha=0.35 + 0.65 * pop)
+        self.fonts.draw(img, self.song_title, cx, cy - R - int(46 * s), int(30 * s) + 2, TEXT, "bold", "cm")
+        hint = ("Deja los dedos quietos un momento…" if has_hands
+                else "Coloca las manos frente a la cámara")
+        self.fonts.draw(img, hint, cx, cy + R + int(36 * s), int(17 * s) + 2, MUTED, "regular", "cm")
+
+    def _draw_fist_ring(self, img, s, pt, progress, label, pose="fist"):
+        """Anillo que se llena mientras se mantiene la pose
+        (verde = puno, dorado = pulgar arriba, rojo = pulgar abajo / salir)."""
+        R = int(46 * s)
+        color = {"thumb": GOLD, "down": RED}.get(pose, ACCENT)
+        circle_alpha(img, pt, R, (30, 30, 30), max(3, int(6 * s)), 0.5)
+        if progress > 0.01:
+            glow(img, pt, int(R * 0.8), color, 0.35 * progress)
+            cv2.ellipse(img, pt, (R, R), -90, 0, int(360 * progress), color, max(3, int(6 * s)), cv2.LINE_AA)
+            label = {"thumb": "Mantén el pulgar", "down": "Mantén para salir"}.get(pose, "Mantén el puño")
+        self.fonts.draw(img, label, pt[0], pt[1] + R + int(26 * s), int(15 * s) + 2,
+                        color if progress > 0.01 else TEXT, "semibold", "cm")
+
+    # --- menu de canciones (carrusel) ---------------------------------------------
+    def song_picked(self):
+        self._picked_t = time.monotonic()
+
+    def render_menu(self, img, *, hands, songs, pos, fist_progress, fist_pt, records, connections,
+                    pose="fist"):
+        """pos = posicion del carrusel sin limite (la cancion es songs[pos % len(songs)]).
+        pose = pose cuya carga se esta mostrando ("fist" elige la cancion, "down" cierra)."""
+        pick_progress = fist_progress if pose == "fist" else 0.0
+        now, dt = self._tick()
+        h, w = img.shape[:2]
+        s = self._s = min(w / 1280, h / 720)
+        if self._car is None:
+            self._car = self._car_goal = float(pos)
+        if pos != self._car_goal:
+            self._arrow = (now, 1 if pos > self._car_goal else -1)
+            self._car_goal = pos
+        self._car += (pos - self._car) * min(1.0, dt * 9)
+
+        img[:] = cv2.convertScaleAbs(img, alpha=0.4, beta=6)     # la camara queda de fondo, oscurecida
+        if self.snow_on:
+            self._draw_snow(img, s, now, dt)
+        self._draw_hands(img, s, hands, connections)
+
+        cx = w // 2
+        self.fonts.draw(img, "Elige una canción", cx, int(64 * s), int(40 * s) + 2, TEXT, "bold", "cm")
+        self.fonts.draw(img, "Desliza la mano para cambiar  ·  Haz un puño para tocar", cx, int(108 * s),
+                        int(17 * s) + 2, MUTED, "regular", "cm", shadow=False)
+
+        # tarjetas: de la mas lejana a la central (la central queda encima)
+        n = len(songs)
+        cy = int(h * 0.5)
+        spacing = int(560 * s)
+        base = math.floor(self._car)
+        order = sorted(range(base - 2, base + 4), key=lambda j: -abs(j - self._car))
+        sel = round(self._car)
+        for j in order:
+            off = j - self._car
+            if abs(off) > 2.2:
+                continue
+            scale = max(0.7, 1 - 0.17 * abs(off))
+            alpha = max(0.0, 1 - 0.45 * abs(off))
+            x = cx + int(off * spacing * (1 - 0.06 * abs(off)))
+            song = songs[j % n]
+            self._draw_card(img, s, x, cy, scale, alpha, song, j % n, n, records.get(song["title"]),
+                            j == sel, pick_progress if j == sel else 0.0, now)
+
+        # flechas a los lados (se iluminan al cambiar)
+        t_arrow, d_arrow = self._arrow
+        for d in (-1, 1):
+            lit = d == d_arrow and now - t_arrow < 0.35
+            ax = cx + d * int(283 * s)
+            R = int(26 * s)
+            rounded_rect(img, ax - R, cy - R, ax + R, cy + R, R, ACCENT if lit else CHIP)
+            k = int(8 * s)
+            pts = np.array([(ax - d * k // 2, cy - k), (ax + d * k // 2, cy), (ax - d * k // 2, cy + k)],
+                           np.int32)
+            cv2.polylines(img, [pts], False, DARK_TEXT if lit else TEXT, max(2, int(3 * s)), cv2.LINE_AA)
+
+        # puntos de pagina
+        dy = cy + int(205 * s)
+        dot = int(5 * s) + 1
+        gap = int(20 * s)
+        x0 = cx - (n - 1) * gap // 2
+        for i in range(n):
+            if i == pos % n:
+                rounded_rect(img, x0 + i * gap - dot * 2, dy - dot, x0 + i * gap + dot * 2, dy + dot, dot, ACCENT)
+            else:
+                cv2.circle(img, (x0 + i * gap, dy), dot - 1, TRACK, -1, cv2.LINE_AA)
+
+        # ayuda abajo
+        chips = [dict(text="← →  Desliza la mano", dot=GOLD), dict(text="Puño  Elegir", dot=ACCENT),
+                 dict(text="Pulgar ↓  Salir", dot=RED), dict(text="Teclado:  ← →  Enter", text_color=MUTED)]
+        widths = [self._chip(img, s, 0, 0, draw=False, **c) for c in chips]
+        g = int(10 * s)
+        x = cx - (sum(widths) + g * (len(chips) - 1)) // 2
+        for c, cw in zip(chips, widths):
+            self._chip(img, s, x, h - int(46 * s), **c)
+            x += cw + g
+
+        if fist_pt is not None:
+            self._draw_fist_ring(img, s, fist_pt, fist_progress, "Haz un puño para elegir", pose)
+        elif not hands:
+            self.fonts.draw(img, "Muestra la mano a la cámara", cx, h - int(96 * s), int(16 * s) + 2,
+                            TEXT, "semibold", "cm")
+
+    def _draw_card(self, img, s, cx, cy, scale, alpha, song, idx, n, record, selected, progress, now):
+        k = round(s * scale * 20) / 20          # escala en pasos (menos tamanos de letra distintos)
+        cw, ch = int(470 * k), int(322 * k)
+        x0, y0 = cx - cw // 2, cy - ch // 2
+        x1, y1 = x0 + cw, y0 + ch
+        if x1 < 0 or x0 > img.shape[1]:
+            return
+        card_bg = (44, 34, 28)
+        pick = max(0.0, 1.0 - (now - self._picked_t) / 0.6) if selected else 0.0
+        if selected:
+            glow_rect(img, x0, y0, x1, y1, int(24 * k), ACCENT, 0.25 + 0.55 * max(progress, pick),
+                      int(18 * s) + 2)
+        panel(img, x0, y0, x1, y1, int(24 * k), card_bg, 0.96,   # opaca: la nieve no se transparenta
+              border=ACCENT if selected else _mix(BORDER, card_bg, 1 - alpha))
+        pad = int(28 * k)
+        inner = cw - 2 * pad
+
+        def T(text, x, y, size, color, weight="regular", anchor="lt", shadow=True):
+            return self.fonts.draw(img, text, x, y, int(size * k) + 2, color, weight, anchor,
+                                   shadow=shadow, alpha=alpha)
+
+        y = y0 + pad
+        T(f"Canción {idx + 1} de {n}", x0 + pad, y, 13, MUTED, shadow=False)
+        # dificultad: tres puntos
+        r = max(2, int(5 * k))
+        for i in range(3):
+            col = GOLD if 2 - i < song["difficulty"] else TRACK
+            cv2.circle(img, (x1 - pad - r - i * (3 * r), y + r), r, _mix(col, card_bg, 1 - alpha), -1,
+                       cv2.LINE_AA)
+        y += int(30 * k)
+
+        size = 32
+        while size > 16 and self.fonts.width(song["title"], int(size * k) + 2, "bold") > inner:
+            size -= 2
+        T(song["title"], x0 + pad, y, size, TEXT, "bold")
+        y += int(46 * k)
+        T(song["subtitle"], x0 + pad, y, 15, MUTED, shadow=False)
+        y += int(34 * k)
+
+        # la melodia en miniatura: una barra por nota, mas alta cuanto mas aguda
+        notes = song["notes"]
+        sh = int(70 * k)
+        bw = inner / len(notes)
+        for i, note in enumerate(notes):
+            bh = int((0.22 + 0.78 * note / 9) * sh)
+            bx0 = x0 + pad + int(i * bw)
+            bx1 = x0 + pad + int((i + 1) * bw) - (1 if bw > 3 else 0)
+            cv2.rectangle(img, (bx0, y + sh - bh), (max(bx0, bx1 - 1), y + sh),
+                          _mix(self.colors[note], card_bg, 1 - alpha), -1)
+        y += sh + int(22 * k)
+
+        nw = T(str(len(notes)), x0 + pad, y, 34, TEXT, "bold")
+        T("notas", x0 + pad + nw + int(8 * k), y + int(14 * k), 16, MUTED, shadow=False)
+        T(f"Récord  {record} %" if record is not None else "Sin récord", x1 - pad, y + int(14 * k), 15,
+          GOLD if record is not None else MUTED, "semibold" if record is not None else "regular", "rt",
+          shadow=False)
+
+        if selected and progress > 0.01:   # barra de carga del puno dentro de la tarjeta
+            bh = max(4, int(6 * k))
+            by = y1 - int(14 * k)
+            rounded_rect(img, x0 + pad, by, x0 + pad + max(bh, int(inner * progress)), by + bh, bh // 2, ACCENT)
+
+    # --- despedida al cerrar con el gesto ---------------------------------------
+    def draw_farewell(self, img, k):
+        """k = 0..1: la imagen se va oscureciendo y aparece el mensaje."""
+        h, w = img.shape[:2]
+        s = min(w / 1280, h / 720)
+        img[:] = cv2.convertScaleAbs(img, alpha=1.0 - 0.85 * k)
+        a = min(k / 0.4, 1.0)
+        pw, ph = int(460 * s), int(170 * s)
+        x0, y0 = (w - pw) // 2, int(h * 0.45) - int(70 * s)
+        panel(img, x0, y0, x0 + pw, y0 + ph, int(22 * s), alpha=0.92 * a, border=BORDER if a >= 1 else None)
+        self.fonts.draw(img, "¡Hasta pronto!", w // 2, int(h * 0.45), int(48 * s) + 2, TEXT, "bold", "cm",
+                        alpha=a)
+        self.fonts.draw(img, "Cerrando el piano…", w // 2, int(h * 0.45) + int(56 * s), int(17 * s) + 2,
+                        MUTED, "regular", "cm", shadow=False, alpha=a)

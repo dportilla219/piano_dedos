@@ -7,3 +7,6 @@ hand_landmarker.task
 
 # Copias manuales (el historial de git ya cumple esa funcion)
 respaldos/
+
+# Records de precision por cancion (local)
+records.json

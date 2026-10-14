@@ -1,16 +1,22 @@
 """
-Piano de dedos con la camara (10 dedos = 10 notas) para tocar Jingle Bells.
+Piano de dedos con la camara (10 dedos = 10 notas) con varias canciones guia (canciones.py).
+
+- Al iniciar aparece un carrusel de canciones: se cambia deslizando la mano y se elige con un puno
+  (gestos.py). Tambien con el teclado: flechas izquierda / derecha y Enter.
+- Al terminar una cancion: pulgar arriba = repetirla, puno = volver a elegir.
+- Pulgar abajo mantenido 1,5 s (en el menu o al terminar) = cerrar la aplicacion.
 
 - Detecta las dos manos con el modelo preentrenado de MediaPipe (Hand Landmarker, Google).
 - Modo "dedos" (por defecto): funciona con los dedos de frente a la camara. Cada dedo se mide
   respecto a su propio nudillo; cuando un dedo baja / se dobla mas que en reposo, suena su nota.
 - Modo "linea": la punta de dedo MAS ABAJO de las dos manos suena al cruzar la linea del teclado.
 
-Teclas:  Q / ESC salir | M cambiar de modo
+Teclas:  Q salir (o gesto de pulgar abajo) | ESC / C volver a las canciones (en el menu, ESC sale) | M cambiar de modo
          W / S (o flechas) modo dedos: mas / menos sensible | modo linea: subir / bajar la linea
          G mostrar / ocultar guia de la cancion | R reiniciar la cancion | N nieve on / off
 """
 import argparse
+import json
 import os
 import time
 import urllib.request
@@ -26,14 +32,17 @@ import mediapipe as mp
 from mediapipe.tasks.python import BaseOptions
 from mediapipe.tasks.python import vision
 
+from canciones import SONGS
+from gestos import HandGestures
 from interfaz import PianoUI
 
 MODEL_URL = ("https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
              "hand_landmarker/float16/latest/hand_landmarker.task")
 MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hand_landmarker.task")
+RECORDS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "records.json")
 
 # ---------------------------------------------------------------------------
-# Escala de 10 notas (Sol3 .. Si4): cubre toda la melodia de Jingle Bells en Do.
+# Escala de 10 notas (Sol3 .. Si4): todas las canciones de canciones.py caben en ella.
 # Mano izquierda (en pantalla): menique -> pulgar = notas 0..4
 # Mano derecha  (en pantalla): pulgar  -> menique = notas 5..9   (como un piano)
 # ---------------------------------------------------------------------------
@@ -47,17 +56,6 @@ TIPS = [4, 8, 12, 16, 20]  # indices MediaPipe: pulgar, indice, medio, anular, m
 LEFT_HAND_IDS = {20: 0, 16: 1, 12: 2, 8: 3, 4: 4}
 RIGHT_HAND_IDS = {4: 5, 8: 6, 12: 7, 16: 8, 20: 9}
 TIP_BASE = {4: 2, 8: 5, 12: 9, 16: 13, 20: 17}  # punta -> nudillo de referencia de ese dedo
-
-# Jingle Bells (indices de NOTES)
-G3, A3, B3, C4, D4, E4, F4, G4, A4, B4 = range(10)
-VERSE_1 = [G3, E4, D4, C4, G3,  G3, E4, D4, C4, A3,  A3, F4, E4, D4, B3,  G4, G4, F4, D4, E4]
-VERSE_2 = [G3, E4, D4, C4, G3,  G3, E4, D4, C4, A3,
-           A3, F4, E4, D4, G4, G4, G4, G4, A4, G4, F4, D4, C4]
-CHORUS_1 = [E4, E4, E4,  E4, E4, E4,  E4, G4, C4, D4, E4,
-            F4, F4, F4, F4, F4, E4, E4, E4, E4, D4, D4, E4, D4, G4]
-CHORUS_2 = [E4, E4, E4,  E4, E4, E4,  E4, G4, C4, D4, E4,
-            F4, F4, F4, F4, F4, E4, E4, E4, G4, G4, F4, D4, C4]
-SONG = VERSE_1 + CHORUS_1 + VERSE_2 + CHORUS_2
 
 HAND_CONNECTIONS = [(0, 1), (1, 2), (2, 3), (3, 4), (0, 5), (5, 6), (6, 7), (7, 8),
                     (5, 9), (9, 10), (10, 11), (11, 12), (9, 13), (13, 14), (14, 15),
@@ -244,6 +242,22 @@ class FingerPressDetector:
 # ---------------------------------------------------------------------------
 # Bucle principal
 # ---------------------------------------------------------------------------
+def load_records():
+    try:
+        with open(RECORDS_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_records(records):
+    try:
+        with open(RECORDS_PATH, "w", encoding="utf-8") as f:
+            json.dump(records, f, ensure_ascii=False, indent=2)
+    except OSError:
+        pass
+
+
 def main():
     parser = argparse.ArgumentParser(description="Piano de 10 dedos con la camara")
     parser.add_argument("--camara", type=int, default=0, help="indice de la camara (0 por defecto)")
@@ -262,10 +276,12 @@ def main():
 
     cap = open_camera(args.camara)
 
-    win = "Piano de dedos - Jingle Bells"
+    win = "Piano de dedos"
     cv2.namedWindow(win, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(win, 1280, 720)
-    ui = PianoUI(NOTES, FINGER_NAMES, COLORS, {"L": LEFT_HAND_IDS, "R": RIGHT_HAND_IDS}, "Jingle Bells")
+    ui = PianoUI(NOTES, FINGER_NAMES, COLORS, {"L": LEFT_HAND_IDS, "R": RIGHT_HAND_IDS})
+    gestures = HandGestures()
+    records = load_records()
 
     mode = args.modo
     detector = FingerPressDetector(thr=args.sensibilidad)
@@ -277,11 +293,58 @@ def main():
     show_guide, song_pos = True, 0
     last_ts = 0
 
+    # estados: "menu" (carrusel) -> "cuenta" (3, 2, 1 mientras se calibran los dedos) -> "tocar"
+    state = "menu"
+    menu_pos = 0           # posicion del carrusel (sin limite; la cancion es SONGS[menu_pos % n])
+    song_info = SONGS[0]
+    song = song_info["notes"]
+    count_t0 = 0.0
+    COUNTDOWN = 3.0
+    saved = False
+    quit_t = None          # instante en que se pidio cerrar (se muestra una despedida y se sale)
+
+    def handle(event):
+        """Aplica un evento: "next" / "prev" / "select" (carrusel), "menu" (volver al carrusel)
+        o "repeat" (repetir la cancion actual con su cuenta atras) o "quit" (cerrar)."""
+        nonlocal state, menu_pos, song_info, song, song_pos, count_t0, saved, active, candidate, cand_count
+        nonlocal quit_t
+        if event == "quit":
+            if quit_t is None:
+                quit_t = time.monotonic()
+                for n in (0, 2, 4):    # acorde de Sol mayor, mas grave: despedida
+                    sounds[n].play()
+        elif event in ("next", "prev") and state == "menu":
+            menu_pos += 1 if event == "next" else -1
+            sounds[SONGS[menu_pos % len(SONGS)]["notes"][0]].play()   # anticipo: su primera nota
+        elif event == "select" and state == "menu":
+            song_info = SONGS[menu_pos % len(SONGS)]
+            song, song_pos, saved = song_info["notes"], 0, False
+            ui.song_picked()
+            ui.reset_song()
+            ui.song_title = song_info["title"]
+            detector.reset()
+            active, candidate, cand_count = None, None, 0
+            for n in (3, 5, 7):    # acorde de Do mayor: cancion elegida
+                sounds[n].play()
+            state, count_t0 = "cuenta", time.monotonic()
+        elif event == "menu" and state != "menu":
+            gestures.reset()
+            state = "menu"
+        elif event == "repeat" and state != "menu":
+            song_pos, saved = 0, False
+            ui.reset_song()
+            detector.reset()
+            active, candidate, cand_count = None, None, 0
+            for n in (3, 5, 7):
+                sounds[n].play()
+            state, count_t0 = "cuenta", time.monotonic()
+
     while True:
         ok, frame = cap.read()
         if not ok:
             break
         frame = cv2.flip(frame, 1)  # efecto espejo: mas natural para tocar
+        cam_aspect = frame.shape[1] / frame.shape[0]
 
         ts = max(int(time.monotonic() * 1000), last_ts + 1)
         last_ts = ts
@@ -292,73 +355,131 @@ def main():
         frame, (ox, oy, sw, sh) = fit_to_window(frame, win)
         line_y = oy + int(sh * line_frac)
         hands = get_hands(result, sw, sh, ox, oy)
-        tips = get_fingertips(hands)
-        lowest = max(tips, key=lambda t: t[2]) if tips else None
+        now = time.monotonic()
+        finished = state == "tocar" and song_pos >= len(song)
 
-        if mode == "dedos":
-            # --- 1-2) cada dedo respecto a su propia mano ---
-            hits = detector.update(hands)
-            active_set = detector.down
+        # gestos: en el menu (deslizar / puno) y al terminar la cancion
+        # (puno = elegir otra cancion, pulgar arriba = repetirla); pulgar abajo = cerrar en ambos
+        fist_pt = None
+        if (state == "menu" or finished) and quit_t is None:
+            poses = ("fist", "thumb", "down") if finished else ("fist", "down")
+            event = gestures.update(result.hand_landmarks, now, cam_aspect, poses)
+            if gestures.palm is not None:
+                fist_pt = (int(ox + gestures.palm[0] * sw), int(oy + gestures.palm[1] * sh))
+            if finished and event == "select":
+                event = "menu"
+            if event:
+                handle(event)
+
+        if state == "menu":
+            ui.render_menu(frame, hands=hands, songs=SONGS, pos=menu_pos, fist_progress=gestures.progress,
+                           fist_pt=fist_pt, records=records, connections=HAND_CONNECTIONS,
+                           pose=gestures.shown_pose)
         else:
-            # --- 1) dedo mas bajo de las dos manos (mayor y en la imagen) ---
-            pressed = lowest[0] if lowest and lowest[2] > line_y else None
+            tips = get_fingertips(hands)
+            lowest = max(tips, key=lambda t: t[2]) if tips else None
 
-            # --- 2) disparo de notas con confirmacion e histeresis ---
-            hits = []
-            if pressed is not None:
-                cand_count = cand_count + 1 if pressed == candidate else 1
-                candidate = pressed
-                if pressed != active and cand_count >= confirm_frames:
-                    hits.append(pressed)
-                    active = pressed
+            if mode == "dedos":
+                # --- 1-2) cada dedo respecto a su propia mano ---
+                hits = detector.update(hands)
+                active_set = detector.down
             else:
-                candidate, cand_count = None, 0
-                if active is not None:
-                    tip = next((t for t in tips if t[0] == active), None)
-                    if tip is None or tip[2] < line_y - hysteresis or (lowest and lowest[0] != active):
-                        active = None  # tecla soltada: el mismo dedo puede volver a sonar
-            active_set = {active} if active is not None else set()
+                # --- 1) dedo mas bajo de las dos manos (mayor y en la imagen) ---
+                pressed = lowest[0] if lowest and lowest[2] > line_y else None
 
-        for fid in hits:
-            sounds[fid].play()
-            guided = show_guide and song_pos < len(SONG)   # cuenta para racha / precision
-            correct = song_pos < len(SONG) and SONG[song_pos] == fid
-            if correct:
-                song_pos += 1
-            tip = next(((x, y) for f, x, y in tips if f == fid), None)
-            ui.note_hit(fid, tip, correct, guided)
+                # --- 2) disparo de notas con confirmacion e histeresis ---
+                hits = []
+                if pressed is not None:
+                    cand_count = cand_count + 1 if pressed == candidate else 1
+                    candidate = pressed
+                    if pressed != active and cand_count >= confirm_frames:
+                        hits.append(pressed)
+                        active = pressed
+                else:
+                    candidate, cand_count = None, 0
+                    if active is not None:
+                        tip = next((t for t in tips if t[0] == active), None)
+                        if tip is None or tip[2] < line_y - hysteresis or (lowest and lowest[0] != active):
+                            active = None  # tecla soltada: el mismo dedo puede volver a sonar
+                active_set = {active} if active is not None else set()
 
-        # --- 3) dibujo ---
-        target = SONG[song_pos] if show_guide and song_pos < len(SONG) else None
-        ui.render(frame, hands=hands, tips=tips, active=active_set, target=target, mode=mode,
-                  thr=detector.thr, deltas=detector.deltas, lowest=lowest, line_y=line_y,
-                  song=SONG, song_pos=song_pos, show_guide=show_guide, connections=HAND_CONNECTIONS)
+            countdown = None
+            if state == "cuenta":
+                countdown = COUNTDOWN - (now - count_t0)
+                hits = []          # durante la cuenta atras los dedos solo se calibran
+                if countdown <= 0:
+                    state, countdown = "tocar", None
+
+            for fid in hits:
+                sounds[fid].play()
+                guided = show_guide and song_pos < len(song)   # cuenta para racha / precision
+                correct = song_pos < len(song) and song[song_pos] == fid
+                if correct:
+                    song_pos += 1
+                tip = next(((x, y) for f, x, y in tips if f == fid), None)
+                ui.note_hit(fid, tip, correct, guided)
+
+            # cancion terminada: guarda el record de precision
+            if song_pos >= len(song) and not saved:
+                saved = True
+                prec = ui.precision()
+                if prec is not None and prec > records.get(song_info["title"], -1):
+                    records[song_info["title"]] = prec
+                    ui.new_record = True
+                    save_records(records)
+
+            # --- 3) dibujo ---
+            target = song[song_pos] if show_guide and song_pos < len(song) else None
+            ui.render(frame, hands=hands, tips=tips, active=active_set, target=target, mode=mode,
+                      thr=detector.thr, deltas=detector.deltas, lowest=lowest, line_y=line_y,
+                      song=song, song_pos=song_pos, show_guide=show_guide, connections=HAND_CONNECTIONS,
+                      countdown=countdown,
+                      fist=(gestures.progress, fist_pt, gestures.shown_pose) if finished else None)
+
+        if quit_t is not None:     # despedida de 1 s y fuera
+            k = min((now - quit_t) / 1.0, 1.0)
+            ui.draw_farewell(frame, k)
+            if k >= 1.0:
+                break
 
         cv2.imshow(win, frame)
         key = cv2.waitKeyEx(1)
-        if key in (ord("q"), ord("Q"), 27):
+        if key in (ord("q"), ord("Q")):
             break
-        if key in (ord("w"), ord("W"), 2490368):      # flecha arriba
-            if mode == "dedos":
-                detector.thr = max(0.10, detector.thr - 0.05)
-            else:
-                line_frac = max(0.1, line_frac - 0.02)
-        elif key in (ord("s"), ord("S"), 2621440):    # flecha abajo
-            if mode == "dedos":
-                detector.thr = min(1.00, detector.thr + 0.05)
-            else:
-                line_frac = min(0.85, line_frac + 0.02)
-        elif key in (ord("m"), ord("M")):
-            mode = "linea" if mode == "dedos" else "dedos"
-            detector.reset()
-            active, candidate, cand_count = None, None, 0
-        elif key in (ord("g"), ord("G")):
-            show_guide = not show_guide
-        elif key in (ord("r"), ord("R")):
-            song_pos = 0
-            ui.reset_song()
-        elif key in (ord("n"), ord("N")):
-            ui.snow_on = not ui.snow_on
+        if state == "menu":
+            if key == 27:                                           # Esc
+                break
+            if key in (2424832, ord("a"), ord("A")):                # flecha izquierda
+                handle("prev")
+            elif key in (2555904, ord("d"), ord("D")):              # flecha derecha
+                handle("next")
+            elif key in (13, 32):                                   # Enter / espacio
+                handle("select")
+            elif key in (ord("n"), ord("N")):
+                ui.snow_on = not ui.snow_on
+        else:
+            if key in (27, ord("c"), ord("C")):                     # Esc / C: volver a las canciones
+                handle("menu")
+            elif key in (ord("w"), ord("W"), 2490368):              # flecha arriba
+                if mode == "dedos":
+                    detector.thr = max(0.10, detector.thr - 0.05)
+                else:
+                    line_frac = max(0.1, line_frac - 0.02)
+            elif key in (ord("s"), ord("S"), 2621440):              # flecha abajo
+                if mode == "dedos":
+                    detector.thr = min(1.00, detector.thr + 0.05)
+                else:
+                    line_frac = min(0.85, line_frac + 0.02)
+            elif key in (ord("m"), ord("M")):
+                mode = "linea" if mode == "dedos" else "dedos"
+                detector.reset()
+                active, candidate, cand_count = None, None, 0
+            elif key in (ord("g"), ord("G")):
+                show_guide = not show_guide
+            elif key in (ord("r"), ord("R")):
+                handle("repeat")
+            elif key in (ord("n"), ord("N")):
+                ui.snow_on = not ui.snow_on
         if cv2.getWindowProperty(win, cv2.WND_PROP_VISIBLE) < 1:
             break
 
