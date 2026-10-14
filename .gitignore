@@ -1,0 +1,9 @@
+# Python
+__pycache__/
+*.pyc
+
+# Modelo de MediaPipe: el script lo descarga solo si falta
+hand_landmarker.task
+
+# Copias manuales (el historial de git ya cumple esa funcion)
+respaldos/

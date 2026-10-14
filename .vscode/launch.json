@@ -1,0 +1,16 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Piano de dedos",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/piano_dedos.py",
+            "cwd": "${workspaceFolder}",
+            "python": "C:/Users/Usuario/AppData/Local/Programs/Python/Python311/python.exe",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": []
+        }
+    ]
+}
