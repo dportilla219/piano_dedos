@@ -7,7 +7,6 @@
             "request": "launch",
             "program": "${workspaceFolder}/piano_dedos.py",
             "cwd": "${workspaceFolder}",
-            "python": "C:/Users/Usuario/AppData/Local/Programs/Python/Python311/python.exe",
             "console": "integratedTerminal",
             "justMyCode": true,
             "args": []
