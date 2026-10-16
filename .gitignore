@@ -4,6 +4,8 @@ __pycache__/
 
 # Modelo de MediaPipe: el script lo descarga solo si falta
 hand_landmarker.task
+# ... salvo la copia de la version web, que se sirve junto a la pagina
+!docs/modelo/hand_landmarker.task
 
 # Copias manuales (el historial de git ya cumple esa funcion)
 respaldos/

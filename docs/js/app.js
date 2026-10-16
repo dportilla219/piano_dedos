@@ -20,7 +20,8 @@ import { HandGestures } from "./gestos.js";
 import { PianoUI } from "./interfaz.js";
 
 const WASM_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
-const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task";
+// el modelo va junto a la pagina: desde storage.googleapis.com a veces tarda minutos en bajar
+const MODEL_URL = "modelo/hand_landmarker.task";
 const RECORDS_KEY = "piano_dedos.records";
 const CAMERA_KEY = "piano_dedos.camara";
 
@@ -98,10 +99,35 @@ class Piano {
 // ---------------------------------------------------------------------------
 // Modelo de manos
 // ---------------------------------------------------------------------------
+let modelProgress = 0;   // 0..1: cuanto se ha descargado del modelo (para la pantalla de inicio)
+
+/** Descarga el modelo a mano para poder mostrar el porcentaje. */
+async function fetchModel() {
+  const res = await fetch(MODEL_URL);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const total = Number(res.headers.get("content-length")) || 0;
+  if (!res.body || !total) return new Uint8Array(await res.arrayBuffer());
+  const reader = res.body.getReader();
+  const chunks = [];
+  let got = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    got += value.length;
+    modelProgress = Math.min(got / total, 1);
+  }
+  const buf = new Uint8Array(got);
+  let off = 0;
+  for (const c of chunks) { buf.set(c, off); off += c.length; }
+  return buf;
+}
+
 async function createLandmarker() {
-  const fileset = await FilesetResolver.forVisionTasks(WASM_URL);
+  const [fileset, model] = await Promise.all([FilesetResolver.forVisionTasks(WASM_URL), fetchModel()]);
+  modelProgress = 1;
   const options = (delegate) => ({
-    baseOptions: { modelAssetPath: MODEL_URL, delegate },
+    baseOptions: { modelAssetBuffer: model, delegate },
     runningMode: "VIDEO",
     numHands: 2,
     // umbrales mas bajos: con los dedos de frente la mano se ve "escorzada" y cuesta mas detectarla
@@ -326,13 +352,21 @@ async function start() {
       try { localStorage.setItem(CAMERA_KEY, cameraSel.value); } catch { /* da igual */ }
     }
     listCameras();   // con el permiso ya concedido aparecen los nombres de las camaras
-    setStatus("Cargando el modelo de manos…");
+    const showProgress = () => {
+      const pct = Math.round(modelProgress * 100);
+      setStatus(pct > 0 && pct < 100 ? `Cargando el modelo de manos… ${pct} %` : "Cargando el modelo de manos…");
+    };
+    showProgress();
+    const timer = setInterval(showProgress, 250);
     let landmarker;
     try {
       landmarker = await landmarkerPromise;
     } catch (e) {
+      modelProgress = 0;
       landmarkerPromise = createLandmarker();   // se reintenta en el proximo clic
       throw new Error(`No se pudo cargar el modelo de manos. Revisa la conexión a internet. (${e.message || e})`);
+    } finally {
+      clearInterval(timer);
     }
     setStatus("");
     overlay.hidden = true;
