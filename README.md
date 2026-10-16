@@ -26,7 +26,9 @@ Se publica con GitHub Pages: *Settings → Pages → Deploy from a branch → `m
 
 Archivos: `docs/index.html` (pantalla de inicio) y `docs/js/` (`app.js`, `interfaz.js`,
 `gestos.js`, `canciones.js`, equivalentes a los `.py`). Si cambias una canción en `canciones.py`,
-cámbiala también en `docs/js/canciones.js`.
+cámbiala también en `docs/js/canciones.js`. La página no depende de servidores externos: el modelo
+de manos (`docs/modelo/`) y MediaPipe Tasks Vision 0.10.14 (`docs/vendor/`, licencia Apache 2.0)
+se sirven junto a ella.
 
 ## Requisitos (versión de Python)
 

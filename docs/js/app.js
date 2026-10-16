@@ -14,14 +14,19 @@ Piano de dedos con la camara, version web (misma logica que piano_dedos.py).
 
 Opciones en la URL (como los argumentos de piano_dedos.py): ?modo=linea&sensibilidad=0.25&linea=0.55
 */
-import { FilesetResolver, HandLandmarker } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+// MediaPipe y el modelo van junto a la pagina (docs/vendor y docs/modelo): desde los servidores
+// externos (jsdelivr, storage.googleapis.com) a veces tardan minutos en bajar.
+import { HandLandmarker } from "../vendor/tasks-vision-0.10.14/vision_bundle.mjs";
 import { SONGS } from "./canciones.js";
 import { HandGestures } from "./gestos.js";
 import { PianoUI } from "./interfaz.js";
 
-const WASM_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
-// el modelo va junto a la pagina: desde storage.googleapis.com a veces tarda minutos en bajar
+const WASM_LOADER_URL = "vendor/tasks-vision-0.10.14/wasm/vision_wasm_internal.js";
+const WASM_BINARY_URL = "vendor/tasks-vision-0.10.14/wasm/vision_wasm_internal.wasm";
 const MODEL_URL = "modelo/hand_landmarker.task";
+// tamanos conocidos, por si el servidor no da el tamano real (p. ej. si comprime la descarga)
+const SIZES = { [WASM_BINARY_URL]: 9423986, [MODEL_URL]: 7819105 };
+const GPU_TIMEOUT = 20000;   // ms: si la GPU no responde en este tiempo, se usa la CPU
 const RECORDS_KEY = "piano_dedos.records";
 const CAMERA_KEY = "piano_dedos.camara";
 
@@ -99,14 +104,23 @@ class Piano {
 // ---------------------------------------------------------------------------
 // Modelo de manos
 // ---------------------------------------------------------------------------
-let modelProgress = 0;   // 0..1: cuanto se ha descargado del modelo (para la pantalla de inicio)
+// para la pantalla de inicio: bytes descargados de cada archivo y paso en el que va la carga
+const loading = { got: {}, stage: "descarga" };
 
-/** Descarga el modelo a mano para poder mostrar el porcentaje. */
-async function fetchModel() {
-  const res = await fetch(MODEL_URL);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const total = Number(res.headers.get("content-length")) || 0;
-  if (!res.body || !total) return new Uint8Array(await res.arrayBuffer());
+function loadProgress() {
+  let got = 0, total = 0;
+  for (const url in SIZES) {
+    got += Math.min(loading.got[url] || 0, SIZES[url]);
+    total += SIZES[url];
+  }
+  return got / total;
+}
+
+/** Descarga un archivo a mano para poder mostrar el porcentaje. */
+async function fetchWithProgress(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
+  if (!res.body) return new Uint8Array(await res.arrayBuffer());
   const reader = res.body.getReader();
   const chunks = [];
   let got = 0;
@@ -115,17 +129,30 @@ async function fetchModel() {
     if (done) break;
     chunks.push(value);
     got += value.length;
-    modelProgress = Math.min(got / total, 1);
+    loading.got[url] = got;
   }
+  loading.got[url] = SIZES[url] ?? got;
   const buf = new Uint8Array(got);
   let off = 0;
   for (const c of chunks) { buf.set(c, off); off += c.length; }
   return buf;
 }
 
+const withTimeout = (promise, ms, msg) =>
+  Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error(msg)), ms))]);
+
 async function createLandmarker() {
-  const [fileset, model] = await Promise.all([FilesetResolver.forVisionTasks(WASM_URL), fetchModel()]);
-  modelProgress = 1;
+  const t0 = performance.now();
+  loading.stage = "descarga";
+  loading.got = {};
+  const [wasm, model] = await Promise.all([fetchWithProgress(WASM_BINARY_URL), fetchWithProgress(MODEL_URL)]);
+  console.info(`Piano: MediaPipe y modelo descargados en ${Math.round(performance.now() - t0)} ms`);
+  loading.stage = "detector";
+  // el motor ya esta en memoria: se le pasa como blob para que MediaPipe no lo vuelva a descargar
+  const fileset = {
+    wasmLoaderPath: new URL(WASM_LOADER_URL, location.href).href,
+    wasmBinaryPath: URL.createObjectURL(new Blob([wasm], { type: "application/wasm" })),
+  };
   const options = (delegate) => ({
     baseOptions: { modelAssetBuffer: model, delegate },
     runningMode: "VIDEO",
@@ -135,12 +162,17 @@ async function createLandmarker() {
     minHandPresenceConfidence: 0.3,
     minTrackingConfidence: 0.3,
   });
+  let landmarker;
   try {
-    return await HandLandmarker.createFromOptions(fileset, options("GPU"));
+    landmarker = await withTimeout(HandLandmarker.createFromOptions(fileset, options("GPU")), GPU_TIMEOUT,
+      "la GPU no respondió");
   } catch (e) {
     console.warn("Sin GPU para MediaPipe, se usa la CPU:", e);
-    return HandLandmarker.createFromOptions(fileset, options("CPU"));
+    loading.stage = "cpu";
+    landmarker = await HandLandmarker.createFromOptions(fileset, options("CPU"));
   }
+  console.info(`Piano: detector listo en ${Math.round(performance.now() - t0)} ms`);
+  return landmarker;
 }
 
 /** Devuelve [[lado 'L'/'R', puntos en pixeles]], ordenadas de izquierda a derecha en pantalla.
@@ -353,8 +385,9 @@ async function start() {
     }
     listCameras();   // con el permiso ya concedido aparecen los nombres de las camaras
     const showProgress = () => {
-      const pct = Math.round(modelProgress * 100);
-      setStatus(pct > 0 && pct < 100 ? `Cargando el modelo de manos… ${pct} %` : "Cargando el modelo de manos…");
+      if (loading.stage === "detector") setStatus("Preparando el detector de manos…");
+      else if (loading.stage === "cpu") setStatus("Preparando el detector de manos (sin aceleración gráfica)…");
+      else setStatus(`Descargando el detector de manos… ${Math.round(loadProgress() * 100)} %`);
     };
     showProgress();
     const timer = setInterval(showProgress, 250);
@@ -362,7 +395,6 @@ async function start() {
     try {
       landmarker = await landmarkerPromise;
     } catch (e) {
-      modelProgress = 0;
       landmarkerPromise = createLandmarker();   // se reintenta en el proximo clic
       throw new Error(`No se pudo cargar el modelo de manos. Revisa la conexión a internet. (${e.message || e})`);
     } finally {
