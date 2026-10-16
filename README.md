@@ -7,7 +7,28 @@ con gestos de la mano.
 Detecta las manos con el modelo preentrenado **Hand Landmarker de MediaPipe** y sintetiza el
 sonido de piano con numpy + pygame.
 
-## Requisitos
+## Versión web (sin instalar nada)
+
+En la carpeta `docs/` hay una versión para el navegador con las mismas canciones, gestos e
+interfaz. Se abre en **https://dportilla219.github.io/piano_dedos/** desde cualquier ordenador con
+cámara web (Chrome, Edge o Firefox): basta con pulsar *Empezar* y permitir la cámara.
+
+- La detección de manos (MediaPipe) se hace en el navegador: la imagen no sale del equipo.
+- Los récords se guardan en el navegador de cada persona.
+- Opciones en la URL, como los argumentos de la versión de Python:
+  `?modo=linea`, `?sensibilidad=0.25`, `?linea=0.6` (se combinan con `&`).
+- `F` pone la pantalla completa. "Salir" (Q o pulgar abajo) vuelve a la pantalla de inicio.
+
+Para probarla en local hace falta un servidor (abrir el `index.html` con doble clic no deja usar
+la cámara): `python -m http.server 8000 --directory docs` y abrir http://localhost:8000.
+
+Se publica con GitHub Pages: *Settings → Pages → Deploy from a branch → `main` / `/docs`*.
+
+Archivos: `docs/index.html` (pantalla de inicio) y `docs/js/` (`app.js`, `interfaz.js`,
+`gestos.js`, `canciones.js`, equivalentes a los `.py`). Si cambias una canción en `canciones.py`,
+cámbiala también en `docs/js/canciones.js`.
+
+## Requisitos (versión de Python)
 
 - **Windows 10/11.** La cámara se abre con los backends MSMF/DirectShow de Windows y las fuentes
   se cargan de `C:\Windows\Fonts` (Segoe UI o Arial).
